@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="780" viewBox="0 0 1200 780">
+  <rect width="1200" height="780" fill="#f4f5f7"/>
+  <rect x="80" y="30" width="1040" height="720" rx="28" fill="#ffffff" stroke="#d9dde5" stroke-width="2"/>
+  <rect x="80" y="30" width="1040" height="72" rx="28" fill="#111827"/>
+  <circle cx="120" cy="66" r="9" fill="#ef4444"/><circle cx="150" cy="66" r="9" fill="#f59e0b"/><circle cx="180" cy="66" r="9" fill="#22c55e"/>
+  <text x="220" y="73" font-family="Arial, sans-serif" font-size="25" fill="#ffffff">小红书 · 种草笔记</text>
+  <rect x="120" y="135" width="420" height="540" rx="18" fill="#eef2ff"/>
+  <rect x="170" y="180" width="320" height="280" rx="22" fill="#d7e4f5"/>
+  <rect x="235" y="230" width="190" height="190" rx="30" fill="#ffffff" stroke="#c6ccd8" stroke-width="3"/>
+  <text x="330" y="285" text-anchor="middle" font-family="Arial, sans-serif" font-size="25" font-weight="700" fill="#111827">LA ROCHE-POSAY</text>
+  <text x="330" y="330" text-anchor="middle" font-family="Arial, sans-serif" font-size="28" font-weight="700" fill="#2563eb">B5</text>
+  <text x="330" y="365" text-anchor="middle" font-family="Arial, sans-serif" font-size="19" fill="#374151">多效修复霜</text>
+  <text x="150" y="510" font-family="Arial, sans-serif" font-size="24" font-weight="700" fill="#111827">理肤泉 B5 多效修复霜</text>
+  <text x="150" y="555" font-family="Arial, sans-serif" font-size="21" fill="#4b5563">敏感肌也能用？7天彻底修复屏障</text>
+  <text x="150" y="600" font-family="Arial, sans-serif" font-size="20" fill="#ef4444">⚠ 功效时间承诺待核验</text>
+  <text x="150" y="640" font-family="Arial, sans-serif" font-size="18" fill="#6b7280">#修护面霜 #敏感肌护肤</text>
+  <rect x="580" y="135" width="490" height="540" rx="18" fill="#fafafa" stroke="#e5e7eb"/>
+  <text x="620" y="185" font-family="Arial, sans-serif" font-size="22" font-weight="700" fill="#111827">评论区片段</text>
+  <line x1="620" y1="210" x2="1030" y2="210" stroke="#e5e7eb"/>
+  <g font-family="Arial, sans-serif" font-size="18" fill="#374151">
+    <text x="620" y="255">用户A　★★★★★　刚用就有效，太神了</text>
+    <text x="620" y="305">用户B　★★★★★　刚用就有效，太神了</text>
+    <text x="620" y="355">用户C　★★★★★　刚用就有效，太神了</text>
+    <text x="620" y="405">用户D　★★★★★　七天屏障完全修复</text>
+    <text x="620" y="455">用户E　★★★★★　回购十次，医生推荐</text>
+  </g>
+  <rect x="620" y="500" width="400" height="105" rx="12" fill="#fff7ed" stroke="#fdba74"/>
+  <text x="645" y="540" font-family="Arial, sans-serif" font-size="19" fill="#c2410c">待核验线索</text>
+  <text x="645" y="575" font-family="Arial, sans-serif" font-size="17" fill="#7c2d12">重复句式 · 集中五星 · 医生背书</text>
+  <text x="620" y="650" font-family="Arial, sans-serif" font-size="16" fill="#9ca3af">示例输入图：demo/product-input-screenshot.svg</text>
+</svg>
