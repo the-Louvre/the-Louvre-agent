@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>TrustLens · 产品识别与检索</title><link rel="icon" href="data:,"><link rel="stylesheet" href="/static/trustlens.css"><link rel="stylesheet" href="/static/product-workbench.css"></head>
+<body><a class="skip-link" href="#canvasViewport">跳到工作画布</a>
+<div id="app" class="app live-app">
+<header class="topbar">
+ <button class="brand" data-action="home" aria-label="TrustLens 工作台"><img src="/static/assets/brand.png" alt=""><strong>TrustLens</strong></button>
+ <div class="task-heading"><div><h1 id="taskTitle">产品识别与资料检索</h1></div><p id="taskSubtitle">上传产品图片，让每一条结论都有来源</p></div>
+ <span class="run-pill"><span class="status-dot"></span><span id="runStatus">等待图片</span></span>
+ <div class="canvas-controls"><div class="segmented"><button class="icon-button" data-action="pan-tool" aria-label="拖动画布" data-icon="move"></button><button class="icon-button selected" data-action="select-tool" aria-label="选择模式" data-icon="mouse-pointer"></button></div><div class="segmented"><button class="icon-button" data-action="zoom-out" aria-label="缩小" data-icon="minus"></button><button id="zoomLabel" data-action="fit">100%</button><button class="icon-button" data-action="zoom-in" aria-label="放大" data-icon="plus"></button></div></div>
+ <div class="top-actions"><button class="button" data-action="export" id="exportButton" disabled><i data-icon="download"></i>导出结果</button><button class="button primary" data-action="run" id="runButton" disabled><i data-icon="play"></i>开始识别与检索</button></div>
+</header>
+<div class="body">
+ <aside class="sidebar" aria-label="图片素材">
+  <nav class="primary-nav"><button data-action="upload"><i data-icon="plus-circle"></i>添加产品图片</button><button data-action="new"><i data-icon="file"></i>新建调查</button></nav>
+  <div class="section-label"><span>当前调查</span></div><nav class="project-list"><button class="selected" data-action="fit"><i data-icon="file-text"></i><span id="projectName">未命名产品</span><span class="selection-dot"></span></button></nav>
+  <div class="section-label source-label"><span id="sourceCount">图片素材 (0)</span><button class="icon-button bordered small" data-action="upload" aria-label="添加图片" data-icon="plus"></button></div>
+  <div id="sourceList" class="source-list"></div>
+  <button class="source-upload" data-action="upload"><i data-icon="upload-cloud"></i><strong>添加图片</strong><small>PNG · JPG · WEBP<br>单张不超过 10 MB</small></button>
+  <div class="sidebar-note"><i data-icon="lock"></i><span>点击开始后，图片会分组并行发送到你配置的模型（最多同时 3 张）；结果按图片隔离。</span></div>
+  <nav class="bottom-nav"><button data-action="settings"><i data-icon="sliders"></i>API 与检索配置</button><button data-action="help"><i data-icon="help-circle"></i>使用说明</button></nav>
+ </aside>
+ <main id="canvasViewport" class="canvas-viewport" tabindex="0" aria-label="产品分析画布">
+  <div id="canvasWorld" class="canvas-world" hidden><canvas id="connections" width="950" height="840" aria-hidden="true"></canvas><div id="imageBoards"></div><div id="agentCards"></div>
+   <button class="evidence-core" data-action="report"><span class="core-icon"><i data-icon="layers"></i></span><strong>共享证据</strong><span id="coreProduct">等待产品识别</span><div><span><i data-icon="file-text"></i><b id="factCount">0</b> 条事实</span><span><i data-icon="link"></i><b id="linkCount">0</b> 个来源</span></div></button>
+   <span class="edge-label edge-publish" id="flowLabel">识别 → 检索 → 证据汇总</span><span class="edge-label edge-facts">产品<br>信息</span><span class="edge-label edge-visual">检索<br>资料</span>
+   <button class="judgment live-judgment" data-action="report"><span class="judgment-symbol"><i data-icon="file-text"></i></span><span class="judgment-text"><small>分析结果</small><strong id="judgmentTitle">等待分析</strong><span id="judgmentSummary">上传图片并配置 API 后开始</span></span><i data-icon="arrow-up-right"></i></button>
+  </div>
+  <div id="emptyState" class="empty-state"><span class="empty-icon"><i data-icon="maximize"></i></span><span class="eyebrow">PRODUCT INTELLIGENCE WORKSPACE</span><h2>从一张产品图片开始</h2><p>识别品牌、产品与包装声明，<br>检索资料，让证据回到画布。</p><button class="button primary" data-action="upload"><i data-icon="plus"></i>上传产品图片</button><small>也可以将图片直接拖到这里</small><div class="empty-stages"><span><i data-icon="image"></i>图片识别</span><i data-icon="arrow-right"></i><span><i data-icon="globe"></i>资料检索</span><i data-icon="arrow-right"></i><span><i data-icon="layers"></i>证据汇总</span></div></div>
+  <div id="dropOverlay" class="canvas-drop" hidden>松开以添加产品图片</div><button id="openInspector" class="drawer-toggle button" data-action="open-inspector" hidden><i data-icon="sliders"></i>分析配置</button>
+ </main>
+ <aside id="inspector" class="inspector" aria-label="分析配置">
+  <div class="drawer-heading"><h2>分析配置</h2><button class="icon-button" data-action="close-inspector" aria-label="收起配置" data-icon="x"></button></div>
+  <div class="connection-badge"><span class="avatar small-avatar"><i data-icon="cpu"></i></span><div><strong id="connectionName">连接你的模型</strong><small id="connectionState">API Key 尚未填写</small></div><span id="connectionDot"></span></div>
+  <div class="tabs" role="tablist" aria-label="分析详情"><button role="tab" id="tab-setup" data-tab="setup" aria-selected="true">配置</button><button role="tab" id="tab-activity" data-tab="activity" aria-selected="false">运行记录</button><button role="tab" id="tab-sources" data-tab="sources" aria-selected="false">来源</button><button role="tab" id="tab-result" data-tab="result" aria-selected="false">Agent 结果</button></div>
+  <div id="inspectorPanel" class="inspector-panel" role="tabpanel" aria-labelledby="tab-setup"></div>
+  <div class="drawer-actions"><button class="button" data-action="test" id="testButton"><i data-icon="zap"></i>测试连接</button><button class="button primary" data-action="save" id="saveButton">保存配置</button></div>
+ </aside>
+</div></div>
+<input type="file" id="sourceFile" accept="image/png,image/jpeg,image/webp" multiple hidden>
+<dialog id="dialog"><div class="dialog-heading"><h2 id="dialogTitle"></h2><button class="icon-button" data-action="close-dialog" aria-label="关闭弹窗" data-icon="x"></button></div><div id="dialogBody"></div></dialog>
+<div id="toast" class="toast" role="status" aria-live="polite"></div>
+<script type="module" src="/static/product-workbench.js"></script>
+</body></html>
