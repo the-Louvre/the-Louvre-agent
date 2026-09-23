@@ -3,9 +3,124 @@ import json
 import unittest
 from unittest.mock import patch
 import httpx
-from app.lab import ReportFormatError, normalize_identity, parse_json, retrieve, run_models, sources_from, validate_report
+from app.lab import ReportFormatError, error_text, normalize_identity, parse_json, retrieve, run_models, sources_from, stable_input_id, validate_report
 
 class WorkbenchLiveTests(unittest.TestCase):
+    def test_upstream_status_errors_explain_key_and_quota_failures(self):
+        self.assertIn('API Key', error_text(httpx.HTTPStatusError('x', request=httpx.Request('POST', 'https://example.com'), response=httpx.Response(401))))
+        self.assertIn('权限', error_text(httpx.HTTPStatusError('x', request=httpx.Request('POST', 'https://example.com'), response=httpx.Response(403))))
+        self.assertIn('额度', error_text(httpx.HTTPStatusError('x', request=httpx.Request('POST', 'https://example.com'), response=httpx.Response(429))))
+
+    def test_vision_report_retries_with_compact_schema_after_truncated_json(self):
+        async def scenario():
+            requests=[]
+            async def handler(request):
+                body=json.loads(request.content); requests.append(body)
+                if len(requests) == 1:
+                    truncated=json.dumps({'input_type':'product_packaging','brand':'Test'})[:-1]
+                    return httpx.Response(200, json={'choices':[{'message':{'content':truncated}}]})
+                if body.get('stream'):
+                    report={'summary':'fixture report','official_facts':[],'claim_evidence_audit':[],'evidence_gaps':[]}
+                    chunk={'choices':[{'delta':{'content':json.dumps(report)}}]}
+                    return httpx.Response(200,text='data: '+json.dumps(chunk)+'\n\ndata: [DONE]\n\n')
+                return httpx.Response(200, json={'choices':[{'message':{'content':json.dumps({'input_type':'product_packaging','brand':'Test','product_name':'Cream','confidence':.95})}}]})
+            real=httpx.AsyncClient
+            with patch('app.lab.httpx.AsyncClient',side_effect=lambda **kw:real(transport=httpx.MockTransport(handler),**kw)):
+                events=[json.loads(s.removeprefix('data: ')) async for s in run_models({
+                    'models':[{'id':'facts','agent_role':'facts','model':'report-model','base_url':'https://model.example/v1','api_key':'x'}],
+                    'vision_model':'vision-model','search_enabled':False,
+                },'data:image/png;base64,a')]
+            self.assertEqual(len(requests),3)
+            self.assertEqual(requests[0]['max_tokens'],1400)
+            self.assertEqual(requests[1]['max_tokens'],1200)
+            self.assertEqual(next(event['product']['brand'] for event in events if event['type']=='product_identified'),'Test')
+            self.assertNotIn('error',[event['type'] for event in events])
+        asyncio.run(scenario())
+
+    def test_structured_claim_contract_preserves_conditions_entities_and_stable_id(self):
+        raw = {
+            'brand': '示例品牌', 'product_name': '示例精华', 'specification': '30ml',
+            'claims': [{
+                'claim_id': 'model-random-id',
+                'text': '受试者30人，连续使用28天，细纹指标改善20%，敏感肌适用',
+                'claim_type': 'efficacy',
+                'metric': {'value': '细纹', 'original_text': '细纹指标'},
+                'value': {'value': 20, 'unit': '%', 'original_text': '改善20%'},
+                'duration': {'value': 28, 'unit': '天', 'original_text': '连续使用28天'},
+                'audience': {'value': '敏感肌', 'original_text': '敏感肌适用'},
+                'sample_size': {'value': 30, 'unit': '人', 'original_text': '受试者30人'},
+                'endorsements': [{'entity_type': 'expert', 'name': '张三', 'original_text': '专家：张三'}],
+            }],
+            'confidence': .98,
+        }
+        first = normalize_identity(raw, 'input-fixed')
+        second = normalize_identity(raw, 'input-fixed')
+        claim = first['claims_structured'][0]
+        self.assertEqual(claim['claim_id'], second['claims_structured'][0]['claim_id'])
+        self.assertNotEqual(claim['claim_id'], 'model-random-id')
+        self.assertEqual(claim['upstream_claim_id'], 'model-random-id')
+        self.assertEqual(first['claims'][0], claim['original_text'])
+        self.assertEqual(claim['conditions']['value']['unit'], '%')
+        self.assertEqual(claim['conditions']['time']['value'], 28)
+        self.assertEqual(claim['conditions']['sample_size']['value'], 30)
+        self.assertEqual(claim['conditions']['endorsements'][0]['name'], '张三')
+        self.assertEqual(first['claim_coverage']['status'], 'complete')
+
+    def test_compound_claims_keep_parent_relationship(self):
+        result = normalize_identity({
+            'claims': ['连续使用28天；细纹改善20%；敏感肌适用'],
+            'confidence': .9,
+        }, 'input-compound')
+        self.assertEqual(result['claim_coverage']['candidate_count'], 4)
+        parent, *children = result['claims_structured']
+        self.assertIsNone(parent['parent_claim_id'])
+        self.assertTrue(children)
+        self.assertTrue(all(child['parent_claim_id'] == parent['claim_id'] for child in children))
+        self.assertEqual({child['input_id'] for child in children}, {'input-compound'})
+
+    def test_budget_overflow_is_explicit_and_not_silently_dropped(self):
+        result = normalize_identity({'claims': [f'声明 {index}' for index in range(10)]}, 'input-budget')
+        coverage = result['claim_coverage']
+        self.assertEqual(coverage['candidate_count'], 10)
+        self.assertEqual(coverage['processed_count'], 8)
+        self.assertEqual(coverage['excluded_count'], 2)
+        self.assertEqual(coverage['status'], 'partial')
+        self.assertTrue(all(item['reason'] == 'budget_exceeded' for item in coverage['excluded']))
+        self.assertTrue(all(item['parse_status'] == 'budget_excluded' for item in coverage['excluded']))
+        self.assertEqual(len(result['claims']), 8)
+
+    def test_uncertain_ocr_and_missing_fields_are_explicit(self):
+        result = normalize_identity({'claims': [{
+            'text': '改善效果约为？', 'ocr_confidence': .2, 'claim_type': 'efficacy',
+        }]}, 'input-uncertain')
+        claim = result['claims_structured'][0]
+        self.assertEqual(claim['parse_status'], 'partially_parsed')
+        self.assertTrue(claim['uncertainty_reasons'])
+        self.assertIsNone(claim['conditions']['value'])
+        self.assertIsNone(claim['conditions']['time'])
+        self.assertEqual(result['claim_coverage']['unparsed_count'], 1)
+
+    def test_input_id_fallback_is_deterministic_and_namespaced(self):
+        self.assertEqual(stable_input_id('same'), stable_input_id('same'))
+        self.assertNotEqual(stable_input_id('same'), stable_input_id('other'))
+        first = normalize_identity({'claims': ['同一声明']}, stable_input_id('image-a'))
+        second = normalize_identity({'claims': ['同一声明']}, stable_input_id('image-b'))
+        self.assertNotEqual(first['claims_structured'][0]['claim_id'], second['claims_structured'][0]['claim_id'])
+
+    def test_report_validation_keeps_valid_claim_id_and_rejects_unknown_id(self):
+        identity = normalize_identity({'claims': ['待核验声明']}, 'input-report')
+        valid_id = identity['claims_structured'][0]['claim_id']
+        report = validate_report({
+            'claim_evidence_audit': [
+                {'claim_id': valid_id, 'claim': '待核验声明', 'status': '待核验', 'source_ids': []},
+                {'claim_id': 'input-report:claim:not-real', 'claim': '伪造声明', 'status': '有资料支持', 'source_ids': []},
+            ]
+        }, [], identity)
+        self.assertEqual(len(report['claim_evidence_audit']), 1)
+        self.assertEqual(report['claim_evidence_audit'][0]['claim_id'], valid_id)
+        self.assertIn('不存在的 claim_id', report['evidence_gaps'][0])
+        self.assertEqual(report['claim_coverage']['input_id'], 'input-report')
+
     def test_identity_classifier_keeps_one_post_small_and_marks_collage_for_separate_batch_items(self):
         one = normalize_identity({'input_type':'ugc_social_post','batch_detected':False,
                                   'brand':'薇诺娜','product_name':'特护面膜','ocr_text':'x'*3000,
@@ -117,6 +232,42 @@ class WorkbenchLiveTests(unittest.TestCase):
             self.assertEqual(len(set(started)),3)
             self.assertTrue(all(any(p.get('type')=='image_url' for p in b['messages'][1]['content']) for b in bodies))
             self.assertEqual({e['model_id'] for e in events if e['type']=='report'},{'facts','review','visual'})
+        asyncio.run(scenario())
+
+    def test_review_agent_receives_structured_claims_and_returns_claim_id(self):
+        async def scenario():
+            requests = []
+            claim_id = 'input-review:claim:fixture'
+            async def handler(request):
+                body = json.loads(request.content)
+                requests.append(body)
+                if not body.get('stream'):
+                    return httpx.Response(200, json={'choices': [{'message': {'content': json.dumps({
+                        'input_type': 'official_product_page', 'brand': 'Test', 'product_name': 'Cream',
+                        'confidence': .92, 'claims': [{'claim_id': 'upstream', 'text': '7天修护', 'claim_type': 'efficacy'}]
+                    })}}]})
+                audit = {'claim_id': claim_id, 'claim': '7天修护', 'status': '待核验', 'reason': '暂无来源', 'source_ids': []}
+                report = {'summary': 'review result', 'official_facts': [], 'claim_evidence_audit': [audit], 'evidence_gaps': []}
+                chunk = {'choices': [{'delta': {'content': json.dumps(report)}}]}
+                return httpx.Response(200, text='data: ' + json.dumps(chunk) + '\n\ndata: [DONE]\n\n')
+            identity = normalize_identity({'brand': 'Test', 'product_name': 'Cream', 'confidence': .92,
+                                           'claims': [{'claim_id': 'upstream', 'text': '7天修护', 'claim_type': 'efficacy'}]}, 'input-review')
+            claim_id = identity['claims_structured'][0]['claim_id']
+            real = httpx.AsyncClient
+            with patch('app.lab.httpx.AsyncClient', side_effect=lambda **kw: real(transport=httpx.MockTransport(handler), **kw)):
+                events = [json.loads(s.removeprefix('data: ')) async for s in run_models({
+                    'input_id': 'input-review',
+                    'models': [{'id': 'review', 'agent_role': 'review', 'model': 'review-model',
+                                'base_url': 'https://model.example/v1', 'api_key': 'x'}],
+                    'vision_model': 'vision-model', 'search_enabled': False,
+                }, 'data:image/png;base64,a')]
+            report = next(event['report'] for event in events if event['type'] == 'report')
+            self.assertEqual(report['claim_evidence_audit'][0]['claim_id'], claim_id)
+            report_task = next(json.loads(next(part['text'] for part in body['messages'][1]['content'] if part.get('type') == 'text')) for body in requests if body.get('stream'))
+            self.assertEqual(report_task['input_id'], 'input-review')
+            self.assertEqual(report_task['claims_structured'][0]['claim_id'], claim_id)
+            self.assertEqual(report_task['claim_coverage']['processed_count'], 1)
+            self.assertNotIn('claims_structured', report_task['image_reading'])
         asyncio.run(scenario())
 
     def test_bailian_report_stream_uses_json_mode_but_custom_endpoint_does_not(self):

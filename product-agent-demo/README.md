@@ -27,6 +27,63 @@ uvicorn app.main:app --reload --port 8000
 - `static/lab.html` + `static/product-workbench.js`：画布、图片素材列表、配置抽屉、批量进度和结果导出。
 - `tests/`：模型输出边界、流式检索、批量状态和 HTTP 入口测试。
 
+## 声明契约
+
+视觉识别结果同时提供兼容字段 `claims` 和结构化字段 `claims_structured`：
+
+- `claims` 是最多 8 条、每条最多 180 字的展示文本，保留给旧消费者。
+- `claims_structured` 是供 `review` Agent 和后续 2B/2C 使用的声明对象。每条声明包含稳定的 `claim_id`、`input_id`、原文、规范化文本、声明类型、父级关系、文本片段、产品上下文、条件字段、解析状态和不确定原因。
+- 条件字段包括功效指标、数值/单位、时间、人群、使用条件、实验样本量和背书实体。字段未出现时为 `null`，不会根据上下文补写。
+- 专家、机构、论文和检测报告引用保存在 `conditions.endorsements`，并保留对应原文片段。
+
+`input_id` 由前端每张图片的 UUID 传入；同一张图片重试时复用该 ID。没有传入 ID 的 API 调用会根据图片二进制或查询内容生成确定性 SHA-256 命名空间。服务端不会直接信任模型提供的 `claim_id`，而是根据输入 ID、声明原文、文本片段、声明类型和重复序号生成系统 ID；模型 ID 仅保存在 `upstream_claim_id`。
+
+复合声明会保留一个父声明，并为拆分出的原子声明设置 `parent_claim_id`。只有上游提供了 `region_id` 或文本位置时才保留，否则使用 `null`。
+
+声明预算超限不会静默丢失。识别结果中的 `claim_coverage` 会报告候选数量、已处理数量、预算排除项、无法解析数量和状态：`complete`、`partial`、`unparsed` 或 `empty`。例如：
+
+```json
+{
+  "claim_coverage": {
+    "candidate_count": 10,
+    "processed_count": 8,
+    "excluded_count": 2,
+    "excluded": [{"reason": "budget_exceeded"}],
+    "unparsed_count": 0,
+    "status": "partial"
+  }
+}
+```
+
+`/api/lab/run` 的 `product_identified` SSE 事件包含 `input_id`、`claims`、`claims_structured` 和 `claim_coverage`。三个 Agent 共享这份识别结果；`review` Agent 必须沿用现有 `claim_id`，报告中的未知 `claim_id` 会被过滤并记录为证据缺口。旧字符串输入会自动适配为结构化声明，因此旧消费者无需立即迁移。
+
+单条结构化声明示例：
+
+```json
+{
+  "claim_id": "input-demo:claim:...",
+  "original_text": "受试者30人，连续使用28天，细纹指标改善20%",
+  "normalized_text": "细纹指标改善20%",
+  "claim_type": "efficacy",
+  "parent_claim_id": null,
+  "input_id": "input-demo",
+  "region_id": null,
+  "conditions": {
+    "efficacy_metric": {"value": "细纹", "original_text": "细纹指标"},
+    "value": {"value": 20, "unit": "%", "original_text": "改善20%"},
+    "time": {"value": 28, "unit": "天", "original_text": "连续使用28天"},
+    "audience": null,
+    "usage_condition": null,
+    "sample_size": {"value": 30, "unit": "人", "original_text": "受试者30人"},
+    "endorsements": []
+  },
+  "parse_status": "parsed",
+  "uncertainty_reasons": []
+}
+```
+
+OCR 不清晰或字段无法确认时，声明会进入 `partially_parsed` 或 `unparsed`，并在 `uncertainty_reasons` 中说明原因；不会补写确定数值。该契约只负责声明解析和追踪，证据检索与最终支持判定仍属于后续 2B/2C。
+
 运行测试（在 `product-agent-demo` 目录内）：
 
 ```bash
