@@ -3,3 +3,11 @@ __pycache__/
 *.py[cod]
 .env
 .DS_Store
+models/
+runtime/agent3/
+
+# Agent3 local calibration inputs and generated review artifacts
+/images/
+/binary-mask.png
+/probability-mask.png
+/overlay.png

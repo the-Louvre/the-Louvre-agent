@@ -1,0 +1,11 @@
+fastapi>=0.115
+uvicorn[standard]>=0.30
+python-multipart>=0.0.9
+numpy<2.0
+Pillow>=10.0
+torch>=2.0
+torchvision>=0.15
+timm
+albumentations==1.3.0
+fvcore
+opencv-python-headless
