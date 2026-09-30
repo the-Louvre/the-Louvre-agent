@@ -1,7 +1,9 @@
 import asyncio
+import os
 import sys
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -25,9 +27,10 @@ class ProductAgentTests(unittest.TestCase):
         self.assertLessEqual(result.confidence, 1.0)
 
     def test_missing_bailian_key_is_explicit(self):
-        client = BailianVisionClient(api_key=None)
-        with self.assertRaises(MissingBailianKeyError):
-            client.identify("/tmp/product.jpg")
+        with patch.dict(os.environ, {"DASHSCOPE_API_KEY": ""}):
+            client = BailianVisionClient(api_key=None)
+            with self.assertRaises(MissingBailianKeyError):
+                client.identify("/tmp/product.jpg")
 
     def test_orchestrator_emits_auditable_events(self):
         class FakeVision:
