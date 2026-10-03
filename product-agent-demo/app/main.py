@@ -11,10 +11,12 @@ from fastapi.staticfiles import StaticFiles
 from .model_client import BailianVisionClient
 from .config import ModelConfig
 from .lab import router as lab_router
+from .agent3.router import router as agent3_router
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 app = FastAPI(title="L'Oréal Product Trust Agent", version="0.1.0")
 app.include_router(lab_router)
+app.include_router(agent3_router)
 app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
 
 
