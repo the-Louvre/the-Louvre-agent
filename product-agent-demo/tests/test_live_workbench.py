@@ -5,6 +5,7 @@ from unittest.mock import patch
 import httpx
 from app.lab import (ReportFormatError, collect_claim_evidence, error_text, normalize_identity, parse_json,
                      retrieve, run_models, sources_from, stable_input_id, validate_report)
+from app.evidence import build_packages, normalize_records
 
 class WorkbenchLiveTests(unittest.TestCase):
     def test_upstream_status_errors_explain_key_and_quota_failures(self):
@@ -458,13 +459,19 @@ class WorkbenchLiveTests(unittest.TestCase):
         requests=[]
         async def handler(req):
             requests.append(req)
-            return httpx.Response(200,json={'output':[{'type':'web_search_call','action':{'sources':[{'url':'https://brand.example/a','title':'Official page'}]}},{'type':'message','content':[{'type':'output_text','text':'Retrieved material','annotations':[]}]}]})
+            if req.method == 'GET':
+                return httpx.Response(200, headers={'content-type':'text/html'}, text='<html><body>Official product body: 7 day repair.</body></html>')
+            return httpx.Response(200,json={'output':[{'type':'web_search_call','action':{'sources':[{'url':'https://brand.example/a','title':'Official page'}]}},{'type':'message','content':[{'type':'output_text','text':'Retrieved material','annotations':[{'url_citation':{'url':'https://brand.example/a','title':'Official page'}}]}]}]})
         real=httpx.AsyncClient
+        records=[]
         with patch('app.lab.httpx.AsyncClient',side_effect=lambda **kw:real(transport=httpx.MockTransport(handler),**kw)):
-            sources,_=asyncio.run(retrieve({'base_url':'https://workspace.cn-beijing.maas.aliyuncs.com/compatible-mode/v1','api_key':'x','model':'qwen3.8-max'},'cream',{}, {'provider':'bailian','model':'qwen3.8-max'}))
+            sources,_=asyncio.run(retrieve({'base_url':'https://workspace.cn-beijing.maas.aliyuncs.com/compatible-mode/v1','api_key':'x','model':'qwen3.8-max'},'cream',{}, {'provider':'bailian','model':'qwen3.8-max'}, records_out=records))
         self.assertTrue(str(requests[0].url).endswith('/responses'))
         self.assertEqual(json.loads(requests[0].content)['tools'],[{'type':'web_search'}])
         self.assertEqual(sources[0]['url'],'https://brand.example/a')
+        self.assertIn('Retrieved material', [source['snippet'] for source in sources])
+        self.assertTrue(any(req.method == 'GET' for req in requests))
+        self.assertTrue(any('Official product body' in record.get('raw_content','') for record in records))
 
     def test_tavily_search_returns_clickable_deduplicated_sources(self):
         seen=[]
@@ -479,6 +486,25 @@ class WorkbenchLiveTests(unittest.TestCase):
         self.assertEqual(sources[0]['snippet'],'Ingredients from source')
         self.assertEqual(seen[0].headers['authorization'],'Bearer search-key')
         self.assertEqual(json.loads(seen[0].content)['query'],'test product')
+
+    def test_tavily_raw_content_enters_body_evidence_for_claim_packages(self):
+        async def handler(request):
+            return httpx.Response(200,json={'results':[{
+                'title':'Brand product','url':'https://brand.example/product',
+                'content':'Brand Cream 7天修护','raw_content':'Brand Cream 7天修护，正文说明。'
+            }]})
+        real=httpx.AsyncClient
+        records=[]
+        def client(**kwargs):return real(transport=httpx.MockTransport(handler),**kwargs)
+        with patch('app.lab.httpx.AsyncClient',side_effect=client):
+            asyncio.run(retrieve({'base_url':'https://model.example/v1','api_key':'model-key'},'test product',{},
+                                 {'provider':'tavily','api_key':'search-key'},records_out=records))
+        evidence=normalize_records(records,'tavily')
+        self.assertEqual(evidence[0]['availability'],'body_available')
+        claim=normalize_identity({'brand':'Brand','product_name':'Cream','claims':['7天修护'],'confidence':.9},'input-tavily')['claims_structured'][0]
+        packages=build_packages([claim],evidence,'input-tavily')
+        self.assertEqual(packages[0]['candidates'][0]['product_match'],'matched')
+        self.assertEqual(packages[0]['candidates'][0]['content_relevance'],'relevant')
 
     def test_configured_vision_model_then_search_then_grounded_report(self):
         bodies=[]

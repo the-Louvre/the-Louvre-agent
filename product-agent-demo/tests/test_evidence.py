@@ -88,6 +88,28 @@ class EvidenceNormalizationTests(unittest.TestCase):
         self.assertIn("sample_size", packages[0]["gaps"])
         self.assertIn("time", packages[0]["candidates"][0]["covered_conditions"])
 
+    def test_campaign_bundle_keeps_same_series_subclaim_as_related_candidate(self):
+        evidence = normalize_records([{
+            "url": "https://shop.example/revitalift", "title": "欧莱雅(L'OREAL)复颜抗皱紧致水乳套装",
+            "raw_content": "欧莱雅复颜系列抗皱紧致水乳套装，柔肤水130ml，乳液110ml。",
+        }], "tavily")
+        claim = {"claim_id": "gift:claim:1", "original_text": "抗皱紧致 养出好气色",
+                 "product_context": {"brand": "L'OREAL PARIS", "product_name": "复颜中秋团圆美礼",
+                                     "specification": "复颜柔肤水130ml+复颜紧致乳110ml"}}
+        link = build_packages([claim], evidence, "gift")[0]["candidates"][0]
+        self.assertEqual(link["product_match"], "related")
+        self.assertEqual(link["content_relevance"], "related")
+
+    def test_unrelated_brand_does_not_become_related_product(self):
+        evidence = normalize_records([{
+            "url": "https://shop.example/other", "title": "其他品牌复颜抗皱紧致水乳套装",
+            "raw_content": "其他品牌复颜抗皱紧致水乳套装。",
+        }], "tavily")
+        claim = {"claim_id": "gift:claim:1", "original_text": "抗皱紧致 养出好气色",
+                 "product_context": {"brand": "L'OREAL PARIS", "product_name": "复颜中秋团圆美礼"}}
+        link = build_packages([claim], evidence, "gift")[0]["candidates"][0]
+        self.assertNotEqual(link["product_match"], "related")
+
 
 if __name__ == "__main__":
     unittest.main()

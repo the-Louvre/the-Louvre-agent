@@ -4,7 +4,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from app.claim_review import adjudicate_claims
+from app.claim_review import adjudicate_claims, review_context
+from app.evidence import build_packages, normalize_records
 
 
 def claim(text_value="7天祛斑", claim_type="efficacy", conditions=None, claim_id="input:claim:1"):
@@ -81,6 +82,51 @@ class ClaimReviewTests(unittest.TestCase):
         ugc = self.adjudicate(c, evidence("ugc", is_ugc=True), package(), audit(c, evidence("ugc", is_ugc=True)))
         self.assertEqual(ugc["status"], "待核验")
         self.assertTrue(ugc["limitations"])
+
+    def test_summary_citation_can_be_partial_but_never_full(self):
+        c = claim()
+        e = evidence("other", "Brand Cream 7天祛斑摘要")
+        e["availability"] = "summary_only"
+        result = self.adjudicate(c, e, package(), audit(c, e))
+        self.assertEqual(result["status"], "部分支持")
+        self.assertIn("摘要级材料", "；".join(result["limitations"]))
+
+    def test_same_series_subclaim_is_partial_and_not_full_product_support(self):
+        c = claim("抗皱紧致 养出好气色", conditions={})
+        c["product_context"] = {"brand": "L'OREAL PARIS", "product_name": "复颜中秋团圆美礼",
+                                "specification": "复颜柔肤水130ml+复颜紧致乳110ml"}
+        e = normalize_records([{
+            "url": "https://shop.example/revitalift", "title": "欧莱雅(L'OREAL)复颜抗皱紧致水乳套装",
+            "raw_content": "欧莱雅复颜系列抗皱紧致水乳套装，柔肤水130ml，乳液110ml。",
+        }], "tavily")[0]
+        p = build_packages([c], [e], "input")[0]
+        a = {"claim_id": c["claim_id"], "status": "有资料支持", "supporting_evidence": [{
+            "evidence_id": e["evidence_id"], "source_id": e["source_id"], "quote": "抗皱紧致",
+            "supported_text": "抗皱紧致", "reason": "正文描述同系列抗皱紧致", "relation": "partial",
+        }]}
+        result = adjudicate_claims([c], [e], [p], [a])[0]
+        self.assertEqual(result["status"], "部分支持")
+        self.assertEqual(result["supporting_evidence"][0]["excerpt"], "抗皱紧致")
+        self.assertIn("同系列", "；".join(result["limitations"]))
+
+    def test_review_context_keeps_eligible_excerpt_without_flooding_model(self):
+        c = claim("抗皱紧致 养出好气色")
+        body = "无关页面内容" * 300 + "欧莱雅复颜抗皱紧致水乳套装" + "导航链接" * 300
+        candidates = []
+        evidence_items = []
+        for index in range(6):
+            item = evidence("other", body)
+            item.update(evidence_id=f"ev-{index}", source_id=f"s{index}")
+            evidence_items.append(item)
+            candidates.append({"evidence_id": item["evidence_id"], "source_id": item["source_id"],
+                               "product_match": "related", "content_relevance": "related"})
+        packages, visible = review_context([c], evidence_items,
+                                           [package(candidates=candidates)])
+        self.assertEqual(len(packages[0]["candidates"]), 2)
+        self.assertEqual(len(visible), 2)
+        self.assertTrue(all("抗皱紧致" in item["original_excerpt"] for item in visible))
+        self.assertTrue(all(len(item["original_excerpt"]) <= 1600 for item in visible))
+        self.assertEqual(len(evidence_items[0]["original_excerpt"]), len(body))
 
     def test_unknown_ids_and_missing_claims_are_conservative(self):
         c = claim()

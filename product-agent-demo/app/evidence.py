@@ -12,6 +12,7 @@ from urllib.parse import urlsplit, urlunsplit
 
 CONDITION_KEYS = ("efficacy_metric", "value", "time", "audience", "usage_condition", "sample_size", "endorsements")
 SOURCE_TYPES = {"brand", "registration", "research", "testing", "platform", "ugc", "other"}
+BRAND_ALIASES = {"lorealparis": ("欧莱雅", "loreal")}
 SOURCE_TYPE_ALIASES = {
     "official": "brand",
     "authority": "registration",
@@ -196,7 +197,28 @@ def _product_match(claim, evidence):
     scope = _text(evidence.get("study_scope")).lower()
     if scope in {"ingredient", "ingredient_study", "成分研究"}:
         return "uncertain", "成分研究不能直接证明成品功效"
+    # A campaign bundle name often differs from its underlying product line.
+    # Keep same-line material as background evidence, never as an exact match.
+    name = _text(expected.get("product_name"))
+    series = re.match(r"[\u4e00-\u9fff]{2}", name)
+    brand = _fold(expected.get("brand"))
+    brand_seen = bool(brand and any(alias in content for alias in (brand, *BRAND_ALIASES.get(brand, ()))))
+    if not any(_text(actual.get(key)) for key in ("brand", "product_name", "specification", "version")):
+        if series and series.group() in content and brand_seen:
+            return "related", "同品牌系列相关，尚未确认当前礼盒及版本"
     return ("matched" if known and not reasons else "uncertain"), ("；".join(reasons) or "产品身份字段相符")
+
+
+def _claim_relevance(claim, excerpt):
+    phrase = _fold(claim.get("normalized_text") or claim.get("original_text"))
+    if phrase and phrase in excerpt:
+        return "relevant"
+    # Two independently occurring substantive Chinese bigrams indicate a
+    # candidate subclaim. The model must still quote and explain that subclaim.
+    pairs = {phrase[i:i + 2] for i in range(len(phrase) - 1)
+             if all("\u4e00" <= ch <= "\u9fff" for ch in phrase[i:i + 2])}
+    pairs -= {"皮肤", "产品", "欧莱", "莱雅", "护肤", "套装", "正装"}
+    return "related" if len({pair for pair in pairs if pair in excerpt}) >= 2 else "irrelevant"
 
 
 def build_packages(claims, evidence, input_id):
@@ -209,15 +231,13 @@ def build_packages(claims, evidence, input_id):
         for index, item in enumerate(evidence):
             pm, pm_reason = _product_match(claim, item)
             excerpt = _fold(item.get("original_excerpt"))
-            metric = _fold(wanted.get("efficacy_metric") or claim.get("normalized_text") or claim.get("original_text"))
-            relevant = bool(metric and metric in excerpt)
-            relevance = "relevant" if relevant else "uncertain" if not excerpt else "irrelevant"
+            relevance = _claim_relevance(claim, excerpt) if excerpt else "uncertain"
             covered = [key for key, value in wanted.items() if _fold(value) and _fold(value) in excerpt]
             uncovered = [key for key in wanted if key not in covered]
             links.append({"claim_id": claim_id, "evidence_id": item["evidence_id"], "source_id": item.get("source_id") or f"s{index + 1}",
                           "product_match": pm, "content_relevance": relevance,
                           "covered_conditions": covered, "uncovered_conditions": uncovered,
-                          "reason": pm_reason + ("；原文相关" if relevant else "；未找到对应原文表述")})
+                          "reason": pm_reason + ("；原文直接相关" if relevance == "relevant" else "；原文涉及声明子命题" if relevance == "related" else "；未找到对应原文表述")})
         direct = [link for link in links if link["product_match"] == "matched" and
                   link["content_relevance"] == "relevant" and not link["uncovered_conditions"] and
                   next((item for item in evidence if item["evidence_id"] == link["evidence_id"]), {}).get("availability") == "body_available"]
@@ -225,9 +245,11 @@ def build_packages(claims, evidence, input_id):
         if not links:
             gaps.append("no_result")
         if links and not any(link["product_match"] == "matched" for link in links):
-            gaps.append("product_identity")
+            gaps.append("product_version_unconfirmed" if any(link["product_match"] == "related" for link in links) else "product_identity")
         if links and not any(link["content_relevance"] == "relevant" and link["product_match"] == "matched" for link in links):
-            gaps.append("claim_text")
+            gaps.append("claim_partial" if any(link["product_match"] in {"matched", "related"} and
+                                               link["content_relevance"] in {"relevant", "related"} for link in links)
+                        else "claim_text")
         if links and not any(item["availability"] == "body_available" for item in evidence):
             gaps.append("body_unavailable")
         for key in wanted:

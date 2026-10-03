@@ -31,19 +31,33 @@ def condition_text(value):
     return text(value)
 
 
-def usable_source(item):
-    """Source metadata is a prerequisite, not an independent verification."""
+def source_tier(item):
+    """Return the evidentiary tier without turning metadata into a verdict.
+
+    Search-provider citations often have useful answer text but no publisher or
+    source label. They may support a bounded, summary-level result; they cannot
+    satisfy the independent/body requirements for a full efficacy verdict.
+    """
     host = urlparse(text(item.get("url"))).hostname or ""
     if item.get("is_ugc") or item.get("source_type") == "ugc":
-        return False
+        return ""
     basis = items(item.get("trust_basis"))
     if "ugc_official_conflict" in basis:
-        return False
+        return ""
     if item.get("source_type") == "registration":
-        return host.endswith((".gov.cn", ".nifdc.org.cn")) and "regulatory_domain" in basis
+        return "independent" if host.endswith((".gov.cn", ".nifdc.org.cn")) and "regulatory_domain" in basis else "context"
     if item.get("source_type") == "brand":
-        return bool(text(item.get("publisher")) and item.get("provider_marked_official"))
-    return item.get("source_type") in {"research", "testing"}
+        return "brand" if text(item.get("publisher")) and item.get("provider_marked_official") else "context"
+    if item.get("source_type") in {"research", "testing"}:
+        return "independent"
+    if item.get("source_type") in {"platform", "other"}:
+        return "context"
+    return ""
+
+
+def usable_source(item):
+    """Compatibility boolean for callers that only need source eligibility."""
+    return bool(source_tier(item))
 
 
 def product_matches(claim, item):
@@ -100,6 +114,47 @@ def _conditions(claim, assessment, item):
         else:
             missing.append(key)
     return covered, missing
+
+
+def review_context(claims, evidence_items, claim_packages, per_claim=2):
+    """Send a small set of eligible candidates to the model; keep full evidence for validation."""
+    evidence = {text(v.get("evidence_id")): v for v in items(evidence_items) if isinstance(v, dict)}
+    claims_by_id = {text(v.get("claim_id")): v for v in items(claims) if isinstance(v, dict)}
+    selected, wanted = [], {}
+    for package in items(claim_packages):
+        if not isinstance(package, dict):
+            continue
+        claim = claims_by_id.get(text(package.get("claim_id")), {})
+        ranked = []
+        for link in items(package.get("candidates")):
+            if not isinstance(link, dict) or text(link.get("evidence_id")) not in evidence:
+                continue
+            pm, relevance = text(link.get("product_match")), text(link.get("content_relevance"))
+            if pm not in {"matched", "related"} or relevance not in {"relevant", "related"}:
+                continue
+            item = evidence[link["evidence_id"]]
+            score = (4 if pm == "matched" else 2) + (4 if relevance == "relevant" else 2)
+            score += 1 if item.get("availability") == "body_available" else 0
+            ranked.append((score, link))
+        ranked.sort(key=lambda pair: pair[0], reverse=True)
+        links = [link for _, link in ranked[:per_claim]]
+        selected.append({**package, "candidates": links})
+        for link in links:
+            wanted.setdefault(link["evidence_id"], []).append(text(claim.get("original_text")))
+    compact = []
+    for eid, claim_texts in wanted.items():
+        item = evidence[eid]
+        body = text(item.get("original_excerpt") or item.get("original_text"))
+        positions = []
+        for claim_text in claim_texts:
+            chunks = re.findall(r"[\u4e00-\u9fff]{2,4}", claim_text)
+            positions.extend(body.find(chunk) for chunk in chunks if chunk in body)
+        start = max(0, min(positions) - 300) if positions else 0
+        excerpt = body[start:start + 1600]
+        compact.append({key: item.get(key) for key in ("evidence_id", "source_id", "url", "title", "publisher",
+                            "source_type", "availability", "study_scope", "product", "experiment_conditions")}
+                       | {"original_excerpt": excerpt})
+    return selected, compact
 
 
 def adjudicate_claims(claims, evidence_items, claim_packages, model_audits, retrieval_status="ok", failure=None):
@@ -162,9 +217,13 @@ def adjudicate_claims(claims, evidence_items, claim_packages, model_audits, retr
                 gaps.append("unlocatable_quote")
                 invalid = True
                 continue
-            if (not usable_source(item) or not product_matches(claim, item)
-                    or text(link.get("product_match")).lower() not in {"matched", "match", "相符"}
-                    or text(link.get("content_relevance")).lower() not in {"relevant", "直接相关", "matched"}):
+            tier = source_tier(item)
+            product_match = text(link.get("product_match")).lower()
+            relevance = text(link.get("content_relevance")).lower()
+            exact_link = product_match in {"matched", "match", "相符"} and relevance in {"relevant", "直接相关", "matched"}
+            related_link = product_match in {"matched", "match", "相符", "related"} and relevance in {"relevant", "直接相关", "matched", "related"}
+            if (not tier or not product_matches(claim, item)
+                    or not related_link):
                 gaps.append("source_or_product_inapplicable")
                 continue
             relation = assessment.get("relation")
@@ -193,7 +252,7 @@ def adjudicate_claims(claims, evidence_items, claim_packages, model_audits, retr
             if direction == "contradicts":
                 # A difference in time, audience, usage or sample is not a refutation.
                 incomparable = set(absent) - {"value", "efficacy_metric"}
-                if (assessment.get("comparable") is not True or incomparable
+                if (not exact_link or assessment.get("comparable") is not True or incomparable
                         or item.get("availability") != "body_available"
                         or (is_effect and item.get("source_type") not in {"research", "testing"})):
                     gaps.append("counterevidence_not_comparable")
@@ -202,14 +261,18 @@ def adjudicate_claims(claims, evidence_items, claim_packages, model_audits, retr
             else:
                 support.append(view)
                 covered.update(matched)
-                if relation == "supports" and not absent and item.get("availability") == "body_available":
-                    if not is_effect or (item.get("source_type") in {"research", "testing"}
-                                         and scope not in {"ingredient", "ingredient_study", "成分研究", "registration", "备案"}):
+                if not exact_link:
+                    limitations.append("仅确认同系列或声明子命题，未确认当前产品/版本和完整表述")
+                if exact_link and relation == "supports" and not absent and item.get("availability") == "body_available":
+                    if tier in {"independent", "brand"} and (not is_effect or (item.get("source_type") in {"research", "testing"}
+                                         and scope not in {"ingredient", "ingredient_study", "成分研究", "registration", "备案"})):
                         full = True
                 if item.get("source_type") == "brand" and is_effect:
                     limitations.append("品牌页面如此声称，不等同于独立功效验证")
                 if item.get("availability") != "body_available":
                     limitations.append("只有提供方原文摘要片段，未获取完整正文")
+                if tier == "context":
+                    limitations.append("来源类型或发布主体未充分确认，仅作为背景或摘要级材料")
                 if is_effect and item.get("source_type") in {"research", "testing"} and scope not in {"finished_product", "product", "成品研究"}:
                     limitations.append("尚未确认研究适用于具体成品")
         if claim.get("parse_status") in {"unparsed", "partially_parsed", "budget_excluded"}:
